@@ -939,6 +939,431 @@ get_memory() {
     log memory "${mem_used:-?}M / ${mem_full:-?}M" >&6
 }
 
+
+get_cpu() {
+    cpu=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null)
+    cpu=${cpu#*: }
+    log cpu "$cpu" >&6
+}
+
+get_cores() {
+    cores=$(nproc 2>/dev/null)
+    [ "$cores" ] && log cores "$cores" >&6
+}
+
+_hpc_number_from_value() {
+    hpc_number=$1
+
+    case $hpc_number in
+        (*:*)
+            hpc_number=${hpc_number##*:}
+        ;;
+    esac
+
+    hpc_number=${hpc_number%%(*}
+
+    case $hpc_number in
+        (''|*[!0-9]*)
+            return 1
+        ;;
+
+        (*)
+            printf '%s' "$hpc_number"
+        ;;
+    esac
+}
+
+_hpc_csv_count() {
+    case $1 in
+        (''|-1|none|None|void|Void|NoDevFiles|all|ALL)
+            return 1
+        ;;
+    esac
+
+    hpc_old_ifs=$IFS
+    IFS=,
+
+    # shellcheck disable=2086
+    {
+        set -f
+        set +f -- $1
+    }
+
+    IFS=$hpc_old_ifs
+    printf '%s' "$#"
+}
+
+_hpc_count_file_lines() {
+    hpc_file=$1
+    [ -r "$hpc_file" ] || return 1
+
+    hpc_count=$(wc -l < "$hpc_file")
+
+    # shellcheck disable=2086
+    {
+        set -f
+        set +f -- $hpc_count
+    }
+
+    [ "$1" ] && printf '%s' "$1"
+}
+
+_hpc_count_file_unique() {
+    hpc_file=$1
+    [ -r "$hpc_file" ] || return 1
+
+    hpc_count=$(sort -u "$hpc_file" | wc -l)
+
+    # shellcheck disable=2086
+    {
+        set -f
+        set +f -- $hpc_count
+    }
+
+    [ "$1" ] && printf '%s' "$1"
+}
+
+_hpc_first_file_word() {
+    [ -r "$1" ] || return 1
+
+    read -r hpc_first _ < "$1"
+    [ "$hpc_first" ] && printf '%s' "$hpc_first"
+}
+
+_hpc_first_word() {
+    hpc_words=$1
+
+    # shellcheck disable=2086
+    {
+        set -f
+        set +f -- $hpc_words
+    }
+
+    [ "$1" ] && printf '%s' "$1"
+}
+
+_hpc_unique_word_count() {
+    hpc_words=$1
+    [ "$hpc_words" ] || return 1
+
+    set -f
+
+    # shellcheck disable=2086
+    hpc_count=$(printf '%s\n' $hpc_words | sort -u | wc -l)
+
+    # shellcheck disable=2086
+    {
+        set +f -- $hpc_count
+    }
+
+    [ "$1" ] && printf '%s' "$1"
+}
+
+_hpc_scheduler() {
+    if [ "$SLURM_JOB_ID$SLURM_CLUSTER_NAME$SLURM_JOB_PARTITION$SLURMD_NODENAME" ]; then
+        printf '%s' slurm
+        return
+    fi
+
+    if [ "$PBS_JOBID$PBS_NODEFILE$PBS_QUEUE" ]; then
+        printf '%s' pbs
+        return
+    fi
+
+    if [ "$LSB_JOBID$LSB_QUEUE$LSB_HOSTS" ]; then
+        printf '%s' lsf
+        return
+    fi
+
+    if [ "$SGE_ROOT$PE_HOSTFILE$QUEUE" ] && [ "$JOB_ID" ]; then
+        printf '%s' sge
+        return
+    fi
+
+    if [ "$OAR_JOB_ID$OAR_NODEFILE" ]; then
+        printf '%s' oar
+        return
+    fi
+
+    if [ "$COBALT_JOBID$COBALT_PARTNAME" ]; then
+        printf '%s' cobalt
+        return
+    fi
+
+    if [ "$FLUX_JOB_ID$FLUX_URI" ]; then
+        printf '%s' flux
+        return
+    fi
+
+    if has squeue || has sinfo || has sbatch; then
+        printf '%s' slurm
+    elif has qconf; then
+        printf '%s' sge
+    elif has qstat || has qsub; then
+        printf '%s' pbs
+    elif has bjobs || has bsub; then
+        printf '%s' lsf
+    fi
+}
+
+_hpc_job() {
+    if [ "$SLURM_JOB_ID" ]; then
+        printf '%s' "$SLURM_JOB_ID"
+    elif [ "$PBS_JOBID" ]; then
+        printf '%s' "$PBS_JOBID"
+    elif [ "$LSB_JOBID" ]; then
+        printf '%s' "$LSB_JOBID"
+    elif [ "$JOB_ID" ]; then
+        printf '%s' "$JOB_ID"
+    elif [ "$OAR_JOB_ID" ]; then
+        printf '%s' "$OAR_JOB_ID"
+    elif [ "$COBALT_JOBID" ]; then
+        printf '%s' "$COBALT_JOBID"
+    elif [ "$FLUX_JOB_ID" ]; then
+        printf '%s' "$FLUX_JOB_ID"
+    fi
+}
+
+_hpc_queue() {
+    if [ "$SLURM_JOB_PARTITION" ]; then
+        printf '%s' "$SLURM_JOB_PARTITION"
+    elif [ "$PBS_QUEUE" ]; then
+        printf '%s' "$PBS_QUEUE"
+    elif [ "$LSB_QUEUE" ]; then
+        printf '%s' "$LSB_QUEUE"
+    elif [ "$QUEUE" ]; then
+        printf '%s' "$QUEUE"
+    elif [ "$OAR_QUEUE" ]; then
+        printf '%s' "$OAR_QUEUE"
+    elif [ "$COBALT_QUEUE" ]; then
+        printf '%s' "$COBALT_QUEUE"
+    fi
+}
+
+_hpc_account() {
+    if [ "$SLURM_JOB_ACCOUNT" ]; then
+        printf '%s' "$SLURM_JOB_ACCOUNT"
+    elif [ "$PBS_ACCOUNT" ]; then
+        printf '%s' "$PBS_ACCOUNT"
+    elif [ "$LSB_PROJECT_NAME" ]; then
+        printf '%s' "$LSB_PROJECT_NAME"
+    elif [ "$OAR_PROJECT" ]; then
+        printf '%s' "$OAR_PROJECT"
+    fi
+}
+
+_hpc_node_count() {
+    if hpc_count=$(_hpc_number_from_value "$SLURM_JOB_NUM_NODES"); then
+        printf '%s' "$hpc_count"
+    elif hpc_count=$(_hpc_number_from_value "$PBS_NUM_NODES"); then
+        printf '%s' "$hpc_count"
+    elif [ "$PBS_NODEFILE" ]; then
+        _hpc_count_file_unique "$PBS_NODEFILE"
+    elif [ "$LSB_HOSTS" ]; then
+        _hpc_unique_word_count "$LSB_HOSTS"
+    elif [ "$PE_HOSTFILE" ]; then
+        _hpc_count_file_lines "$PE_HOSTFILE"
+    elif [ "$OAR_NODEFILE" ]; then
+        _hpc_count_file_unique "$OAR_NODEFILE"
+    fi
+}
+
+_hpc_task_count() {
+    if hpc_count=$(_hpc_number_from_value "$SLURM_NTASKS"); then
+        printf '%s' "$hpc_count"
+    elif hpc_count=$(_hpc_number_from_value "$SLURM_STEP_NUM_TASKS"); then
+        printf '%s' "$hpc_count"
+    elif hpc_count=$(_hpc_number_from_value "$SLURM_NPROCS"); then
+        printf '%s' "$hpc_count"
+    elif hpc_count=$(_hpc_number_from_value "$PBS_NP"); then
+        printf '%s' "$hpc_count"
+    elif hpc_count=$(_hpc_number_from_value "$LSB_DJOB_NUMPROC"); then
+        printf '%s' "$hpc_count"
+    elif hpc_count=$(_hpc_number_from_value "$NSLOTS"); then
+        printf '%s' "$hpc_count"
+    elif [ "$OAR_NODEFILE" ]; then
+        _hpc_count_file_lines "$OAR_NODEFILE"
+    fi
+}
+
+_hpc_gpu_count() {
+    for hpc_gpu_value in "$SLURM_GPUS_ON_NODE" "$SLURM_GPUS" "$SLURM_GPUS_PER_NODE"; do
+        if hpc_count=$(_hpc_number_from_value "$hpc_gpu_value"); then
+            [ "$hpc_count" != 0 ] && printf '%s' "$hpc_count"
+            return
+        fi
+    done
+
+    for hpc_gpu_value in "$SLURM_GPUS" "$SLURM_JOB_GPUS" "$SLURM_STEP_GPUS" \
+                         "$CUDA_VISIBLE_DEVICES" "$NVIDIA_VISIBLE_DEVICES" \
+                         "$ROCR_VISIBLE_DEVICES" "$HIP_VISIBLE_DEVICES"; do
+        if hpc_count=$(_hpc_csv_count "$hpc_gpu_value"); then
+            printf '%s' "$hpc_count"
+            return
+        fi
+    done
+
+    if [ "$PBS_GPUFILE" ]; then
+        _hpc_count_file_lines "$PBS_GPUFILE"
+    fi
+}
+
+_hpc_node_summary() {
+    hpc_node=
+    hpc_count=
+
+    if [ "$SLURMD_NODENAME" ]; then
+        printf '%s' "$SLURMD_NODENAME"
+        return
+    fi
+
+    if [ "$SLURM_NODELIST" ]; then
+        hpc_node=$SLURM_NODELIST
+        hpc_count=$(_hpc_node_count)
+
+        if [ "$hpc_count" ] && [ "$hpc_count" != 1 ]; then
+            hpc_node="$hpc_node ($hpc_count nodes)"
+        fi
+
+        printf '%s' "$hpc_node"
+        return
+    fi
+
+    if [ "$PBS_NODEFILE" ]; then
+        hpc_node=$(_hpc_first_file_word "$PBS_NODEFILE")
+        hpc_count=$(_hpc_count_file_unique "$PBS_NODEFILE")
+    elif [ "$LSB_HOSTS" ]; then
+        hpc_node=$(_hpc_first_word "$LSB_HOSTS")
+        hpc_count=$(_hpc_unique_word_count "$LSB_HOSTS")
+    elif [ "$PE_HOSTFILE" ]; then
+        hpc_node=$(_hpc_first_file_word "$PE_HOSTFILE")
+        hpc_count=$(_hpc_count_file_lines "$PE_HOSTFILE")
+    elif [ "$OAR_NODEFILE" ]; then
+        hpc_node=$(_hpc_first_file_word "$OAR_NODEFILE")
+        hpc_count=$(_hpc_count_file_unique "$OAR_NODEFILE")
+    elif [ "$COBALT_PARTNAME" ]; then
+        hpc_node=$COBALT_PARTNAME
+    elif [ "$SLURM_JOB_ID$PBS_JOBID$LSB_JOBID$JOB_ID$OAR_JOB_ID$COBALT_JOBID$FLUX_JOB_ID" ]; then
+        hpc_node=${HOSTNAME:-$(hostname)}
+    fi
+
+    [ "$hpc_node" ] || return
+
+    if [ "$hpc_count" ] && [ "$hpc_count" != 1 ]; then
+        hpc_node="$hpc_node ($hpc_count nodes)"
+    fi
+
+    printf '%s' "$hpc_node"
+}
+
+_hpc_summary() {
+    hpc_scheduler=$(_hpc_scheduler)
+    [ "$hpc_scheduler" ] || return
+
+    hpc_info=$hpc_scheduler
+    hpc_job=$(_hpc_job)
+    hpc_queue=$(_hpc_queue)
+    hpc_account=$(_hpc_account)
+    hpc_nodes=$(_hpc_node_count)
+    hpc_tasks=$(_hpc_task_count)
+    hpc_gpus=$(_hpc_gpu_count)
+
+    [ "$hpc_job" ] && hpc_info="$hpc_info job $hpc_job"
+    [ "$hpc_queue" ] && hpc_info="$hpc_info queue $hpc_queue"
+    [ "$hpc_account" ] && hpc_info="$hpc_info account $hpc_account"
+
+    if [ "$hpc_nodes" ]; then
+        if [ "$hpc_nodes" = 1 ]; then
+            hpc_info="$hpc_info $hpc_nodes node"
+        else
+            hpc_info="$hpc_info $hpc_nodes nodes"
+        fi
+    fi
+
+    if [ "$hpc_tasks" ]; then
+        if [ "$hpc_tasks" = 1 ]; then
+            hpc_info="$hpc_info $hpc_tasks task"
+        else
+            hpc_info="$hpc_info $hpc_tasks tasks"
+        fi
+    fi
+
+    if [ "$hpc_gpus" ]; then
+        if [ "$hpc_gpus" = 1 ]; then
+            hpc_info="$hpc_info $hpc_gpus gpu"
+        else
+            hpc_info="$hpc_info $hpc_gpus gpus"
+        fi
+    fi
+
+    printf '%s' "$hpc_info"
+}
+
+get_gpu() {
+    hpc_gpus=$(_hpc_gpu_count)
+
+    if has nvidia-smi; then
+        gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+        count=${hpc_gpus:-$(nvidia-smi -L 2>/dev/null | wc -l)}
+
+        # shellcheck disable=2086
+        {
+            set -f
+            set +f -- $count
+        }
+
+        count=$1
+
+        [ "$gpu" ] && [ "$count" ] && log gpu "${count}x $gpu" >&6
+        [ "$gpu" ] && return
+    fi
+
+    [ "$hpc_gpus" ] && log gpu "$hpc_gpus allocated" >&6
+}
+
+get_hpc() {
+    hpc=$(_hpc_summary)
+    [ "$hpc" ] && log hpc "$hpc" >&6
+}
+
+get_hopc() {
+    hpc=$(_hpc_summary)
+    [ "$hpc" ] && log hopc "$hpc" >&6
+}
+
+get_node() {
+    node=$(_hpc_node_summary)
+    [ "$node" ] && log node "$node" >&6
+}
+
+get_scheduler() {
+    scheduler=$(_hpc_scheduler)
+    [ "$scheduler" ] && log scheduler "$scheduler" >&6
+}
+
+get_job() {
+    job=$(_hpc_job)
+    [ "$job" ] || return
+
+    queue=$(_hpc_queue)
+    account=$(_hpc_account)
+
+    [ "$queue" ] && job="$job ($queue)"
+    [ "$account" ] && job="$job account $account"
+
+    log job "$job" >&6
+}
+
+get_queue() {
+    queue=$(_hpc_queue)
+    [ "$queue" ] && log queue "$queue" >&6
+}
+
+get_tasks() {
+    tasks=$(_hpc_task_count)
+    [ "$tasks" ] && log tasks "$tasks" >&6
+}
+
 get_wm() {
     case $os in
         (Darwin*)
@@ -1914,7 +2339,7 @@ EOF
         # Disable globbing and set the positional parameters to the
         # contents of 'PF_INFO'.
         set -f
-        set +f -- ${PF_INFO-ascii title os host kernel uptime pkgs memory}
+        set +f -- ${PF_INFO-ascii title os host cpu cores gpu hpc node kernel uptime pkgs memory}
 
         # Iterate over the info functions to determine the lengths of the
         # "info names" for output alignment. The option names and subtitles
