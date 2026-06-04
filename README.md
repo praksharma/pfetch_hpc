@@ -1,5 +1,5 @@
 # pfetch for HPC clusters
-The original README of pfetch can be found [here]([url](https://github.com/dylanaraps/pfetch/blob/master/README.md)).
+The original README of pfetch can be found [here](https://github.com/dylanaraps/pfetch/blob/master/README.md).
 
 ## How to use it?
 Copy the sh file to your machine and run it.
